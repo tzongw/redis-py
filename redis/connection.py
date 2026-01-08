@@ -1470,13 +1470,18 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
             # queueing invalidations in stale connections.
             cache_entry = self._cache.get(cache_key)
             if cache_entry is not None and cache_entry.status == CacheEntryStatus.VALID:
-                self._current_command_cache_entry = cache_entry
                 if cache_entry.connection_ref != self._conn:
                     with self._pool_lock:
                         while cache_entry.connection_ref.can_read():
                             cache_entry.connection_ref.read_response(push_request=True)
-
-                return
+                    # Entry stays in cache.
+                    if self._cache.get(cache_key) is not None:
+                        self._current_command_cache_entry = cache_entry
+                        return
+                    cache_entry = None
+                else:
+                    self._current_command_cache_entry = cache_entry
+                    return
 
             if cache_entry is None:
                 # Creates cache entry.

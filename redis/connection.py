@@ -1474,7 +1474,7 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
                     with self._pool_lock:
                         while cache_entry.connection_ref.can_read():
                             cache_entry.connection_ref.read_response(push_request=True)
-                    # Entry stays in cache.
+                    # Check if entry stays in cache.
                     if self._cache.get(cache_key) is not None:
                         self._current_command_cache_entry = cache_entry
                         return
@@ -1507,7 +1507,7 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
         self, disable_decoding=False, *, disconnect_on_error=True, push_request=False
     ):
         with self._cache_lock:
-            # Check if command response exists in a cache and it's not in progress.
+            # Check if command response cache entry exists and it's valid.
             if (
                 self._current_command_cache_entry is not None
                 and self._current_command_cache_entry.status == CacheEntryStatus.VALID

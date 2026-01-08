@@ -1478,8 +1478,6 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
 
                 return
 
-            # Set temporary entry value to prevent
-            # race condition from another connection.
             if cache_entry is None:
                 # Creates cache entry.
                 cache_entry = CacheEntry(
@@ -1488,6 +1486,8 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
                     status=CacheEntryStatus.IN_PROGRESS,
                     connection_ref=self._conn,
                 )
+                # Set temporary entry value to prevent
+                # race condition from another connection.
                 self._cache.set(cache_entry)
                 self._current_command_cache_entry = cache_entry
 

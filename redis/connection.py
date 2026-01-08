@@ -1365,7 +1365,7 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
         self._pool_lock = pool_lock
         self._cache = cache
         self._cache_lock = threading.RLock()
-        self._current_command_cache_key = None
+        self._current_command_cache_entry = None
         self._current_options = None
         self.register_connect_callback(self._enable_tracking_callback)
 
@@ -1453,15 +1453,14 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
             if not self._cache.is_cachable(
                 CacheKey(command=args[0], redis_keys=(), redis_args=())
             ):
-                self._current_command_cache_key = None
+                self._current_command_cache_entry = None
                 self._conn.send_command(*args, **kwargs)
                 return
 
         if kwargs.get("keys") is None:
             raise ValueError("Cannot create cache key.")
 
-        # Creates cache key.
-        self._current_command_cache_key = CacheKey(
+        cache_key = CacheKey(
             command=args[0], redis_keys=tuple(kwargs.get("keys")), redis_args=args
         )
 
@@ -1469,26 +1468,28 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
             # We have to trigger invalidation processing in case if
             # it was cached by another connection to avoid
             # queueing invalidations in stale connections.
-            if self._cache.get(self._current_command_cache_key):
-                entry = self._cache.get(self._current_command_cache_key)
-
-                if entry.connection_ref != self._conn:
+            cache_entry = self._cache.get(cache_key)
+            if cache_entry is not None and cache_entry.status == CacheEntryStatus.VALID:
+                self._current_command_cache_entry = cache_entry
+                if cache_entry.connection_ref != self._conn:
                     with self._pool_lock:
-                        while entry.connection_ref.can_read():
-                            entry.connection_ref.read_response(push_request=True)
+                        while cache_entry.connection_ref.can_read():
+                            cache_entry.connection_ref.read_response(push_request=True)
 
                 return
 
             # Set temporary entry value to prevent
             # race condition from another connection.
-            self._cache.set(
-                CacheEntry(
-                    cache_key=self._current_command_cache_key,
+            if cache_entry is None:
+                # Creates cache entry.
+                cache_entry = CacheEntry(
+                    cache_key=cache_key,
                     cache_value=self.DUMMY_CACHE_VALUE,
                     status=CacheEntryStatus.IN_PROGRESS,
                     connection_ref=self._conn,
                 )
-            )
+                self._cache.set(cache_entry)
+                self._current_command_cache_entry = cache_entry
 
         # Send command over socket only if it's allowed
         # read-only command that not yet cached.
@@ -1503,15 +1504,13 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
         with self._cache_lock:
             # Check if command response exists in a cache and it's not in progress.
             if (
-                self._current_command_cache_key is not None
-                and self._cache.get(self._current_command_cache_key) is not None
-                and self._cache.get(self._current_command_cache_key).status
-                != CacheEntryStatus.IN_PROGRESS
+                self._current_command_cache_entry is not None
+                and self._current_command_cache_entry == CacheEntryStatus.VALID
             ):
                 res = copy.deepcopy(
-                    self._cache.get(self._current_command_cache_key).cache_value
+                    self._current_command_cache_entry.cache_value
                 )
-                self._current_command_cache_key = None
+                self._current_command_cache_entry = None
                 return res
 
         response = self._conn.read_response(
@@ -1522,23 +1521,24 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
 
         with self._cache_lock:
             # Prevent not-allowed command from caching.
-            if self._current_command_cache_key is None:
+            if self._current_command_cache_entry is None:
                 return response
             # If response is None prevent from caching.
+            cache_key = self._current_command_cache_entry.cache_key
             if response is None:
-                self._cache.delete_by_cache_keys([self._current_command_cache_key])
+                self._cache.delete_by_cache_keys([cache_key])
                 return response
 
-            cache_entry = self._cache.get(self._current_command_cache_key)
+            cache_entry = self._cache.get(cache_key)
 
             # Cache only responses that still valid
             # and wasn't invalidated by another connection in meantime.
-            if cache_entry is not None:
+            if cache_entry is self._current_command_cache_entry:
                 cache_entry.status = CacheEntryStatus.VALID
                 cache_entry.cache_value = response
                 self._cache.set(cache_entry)
 
-            self._current_command_cache_key = None
+            self._current_command_cache_entry = None
 
         return response
 

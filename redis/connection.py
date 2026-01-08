@@ -1505,7 +1505,7 @@ class CacheProxyConnection(MaintNotificationsAbstractConnection, ConnectionInter
             # Check if command response exists in a cache and it's not in progress.
             if (
                 self._current_command_cache_entry is not None
-                and self._current_command_cache_entry == CacheEntryStatus.VALID
+                and self._current_command_cache_entry.status == CacheEntryStatus.VALID
             ):
                 res = copy.deepcopy(
                     self._current_command_cache_entry.cache_value
